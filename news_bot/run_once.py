@@ -1,4 +1,5 @@
 """Один проход бота: проверить ленту, опубликовать до N новых новостей. Запускается GitHub Actions по расписанию."""
+import dataclasses
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -26,8 +27,36 @@ def notify_admin(cfg, text):
             pass
 
 
+META_KEY = "meta:gemini_model"
+REPROBE_DAYS = 7
+
+
+def stored_model(store, now):
+    """Модель Gemini, которая работала в прошлый раз. Раз в неделю забываем её, чтобы заново проверить более новые."""
+    row = store.get(META_KEY)
+    if not row or not row["status"]:
+        return "", None
+    try:
+        age = now.replace(tzinfo=None) - datetime.strptime(row["date"], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return "", row
+    return ("" if age > timedelta(days=REPROBE_DAYS) else row["status"]), row
+
+
+def remember_model(store, model_used, now):
+    provider, _, model = model_used.partition("/")
+    if provider != "gemini":
+        return
+    pref, row = stored_model(store, now)
+    if not row or row["status"] != model or not pref:
+        store.set(META_KEY, model, 0, "")
+
+
 def run(cfg, store, now=None):
     now = now or datetime.now(timezone.utc)
+    summarizer.BAD_MODELS.clear()
+    pref, _ = stored_model(store, now)
+    cfg = dataclasses.replace(cfg, preferred_model=pref)
     items = collect(cfg)
     log(f"В ленте статей: {len(items)}")
     stats = {"posted": 0, "skipped": 0, "failed": 0}
@@ -72,6 +101,7 @@ def run(cfg, store, now=None):
             t1 = time.monotonic()
             result, model = summarizer.summarize(art, cfg)
             log(f"Резюме готово за {time.monotonic() - t1:.0f} с [{model}]")
+            remember_model(store, model, now)
             if result.get("skip"):
                 store.set(url, "skipped", attempts, it["title"])
                 log(f"Пропущено ({result['skip_reason']}): {url}")

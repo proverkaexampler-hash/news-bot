@@ -10,12 +10,15 @@ SYSTEM = """You are the editor of a Ukrainian-language Telegram channel about cr
 
 STRICT RULES
 1. Use ONLY facts that are present in the article text. Never invent, round or "improve" numbers, dates, names, quotes or causes. If something is unclear or missing, leave it out.
-2. Write natural, literate Ukrainian (not a word-for-word translation). Keep names, tickers and projects recognisable: Bitcoin -> Біткоїн, Ethereum -> Ефіріум, Binance stays Binance, tickers such as BTC, ETH, BNB stay in Latin. Transliterate personal names into Ukrainian.
+2. Write natural, literate Ukrainian (not a word-for-word translation). Keep names, tickers and projects recognisable: Bitcoin -> Біткоїн, Ethereum -> Ефіріум, Binance stays Binance, tickers such as BTC, ETH, BNB stay in Latin. Transliterate personal names into Ukrainian. Follow Ukrainian punctuation: set off appositions with dashes or commas ("Емітент USDT — компанія Tether — відзвітував ...").
 3. Neutral news tone. No hype, no clickbait, no emojis, no markdown, no HTML, no hashtags. Never give investment advice; attribute forecasts and opinions to the people who gave them ("за словами ...", "на думку аналітика ...").
 4. "summary": 3-5 short paragraphs separated by a blank line, between {min} and {max} characters in total. Paragraph 1: the main event with the most important numbers, who and when. Next paragraphs: key details, context, named experts' reactions and forecasts. Last paragraph only if the article mentions it: risks or what to watch next.
 5. "title": precise Ukrainian headline, at most 110 characters, no clickbait, no final period, no quotation marks around it.
 6. If the text is NOT a real news article (advertising, promo or bonus announcement, cookie banner, paywall stub, list of links, fewer than about 300 meaningful characters), set "skip": true and explain briefly in "skip_reason".
 Return ONLY a JSON object: {{"skip": false, "skip_reason": "", "title": "...", "summary": "..."}}"""
+
+
+BAD_MODELS = set()          # модели, которые в этом запуске не ответили — к ним больше не возвращаемся
 
 
 class SummarizeError(Exception):
@@ -161,7 +164,11 @@ def summarize(article, cfg):
         fn = call_gemini if provider == "gemini" else call_groq
         if not key:
             continue
+        if provider == "gemini" and cfg.preferred_model in models:           # сначала модель, которая сработала в прошлый раз
+            models = [cfg.preferred_model] + [m for m in models if m != cfg.preferred_model]
         for model in models:
+            if f"{provider}/{model}" in BAD_MODELS:
+                continue
             if time.monotonic() - started > cfg.llm_budget:
                 errors.append(f"исчерпан бюджет времени {cfg.llm_budget} с")
                 raise SummarizeError("; ".join(errors[-4:]))
@@ -174,5 +181,6 @@ def summarize(article, cfg):
                 except SummarizeError as e:
                     errors.append(str(e))
                     if "HTTP" in str(e) or "таймаут" in str(e) or "сеть" in str(e):     # повтор той же модели не поможет
+                        BAD_MODELS.add(f"{provider}/{model}")
                         break
     raise SummarizeError("; ".join(errors[-4:]) or "не настроен ни один ключ нейросети")
