@@ -42,6 +42,8 @@ class Config:
     skip_categories: list = None         # рубрики, которые не публикуем (у ForkLog «Лонгриды» — гостевые/рекламные)
     use_photos: bool = True              # False — не брать фото из статей
     fallback_image_url: str = ""         # картинка по умолчанию, если фото нет или оно отключено
+    llm_budget: int = 150                # сколько секунд максимум тратим на нейросети для одной статьи
+    run_budget: int = 420                # после скольких секунд работы не брать новые статьи (лимит запуска — 10 минут)
     dry_run: bool = False
     admin_chat_id: str = ""
 
@@ -63,6 +65,7 @@ class Config:
             title_prefix=("" if e("TITLE_PREFIX") == "-" else (e("TITLE_PREFIX") or "📰 ")),
             repeat_title=((e("REPEAT_TITLE") or "1") != "0"),
             source_label=e("SOURCE_LABEL") or "Джерело",
+            llm_budget=_int("LLM_BUDGET", 150), run_budget=_int("RUN_BUDGET", 420),
             skip_categories=[x.lower() for x in _list("SKIP_CATEGORIES", "Лонгриды")],
             use_photos=((e("USE_PHOTOS") or "1") != "0"), fallback_image_url=e("FALLBACK_IMAGE_URL", ""),
             dry_run=(e("DRY_RUN", "") .lower() in ("1", "true", "yes")), admin_chat_id=e("ADMIN_CHAT_ID", ""),

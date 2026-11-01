@@ -71,14 +71,19 @@ def validate(data, cfg):
     return {"skip": False, "title": title, "summary": summary}
 
 
-def _post(url, headers, body, timeout=90):
+def _post(url, headers, body, timeout=(10, 60)):
     return requests.post(url, headers=headers, json=body, timeout=timeout)
 
 
 def _with_retries(call, what):
     """429 и 5xx — подождать и повторить; остальное — сразу ошибка."""
     for attempt in range(3):
-        r = call()
+        try:
+            r = call()
+        except requests.Timeout:
+            raise SummarizeError(f"{what}: таймаут (нет ответа)")
+        except requests.RequestException as e:
+            raise SummarizeError(f"{what}: сеть ({type(e).__name__})")
         if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
             time.sleep(8 * (attempt + 1))
             continue
@@ -149,6 +154,7 @@ def summarize(article, cfg):
     system = SYSTEM.format(min=cfg.summary_min, max=cfg.summary_max)
     user = build_user_prompt(article)
     errors = []
+    started = time.monotonic()
     for provider in cfg.llm_order:
         key = cfg.gemini_key if provider == "gemini" else cfg.groq_key
         models = gemini_candidates(cfg) if provider == "gemini" else cfg.groq_models
@@ -156,6 +162,9 @@ def summarize(article, cfg):
         if not key:
             continue
         for model in models:
+            if time.monotonic() - started > cfg.llm_budget:
+                errors.append(f"исчерпан бюджет времени {cfg.llm_budget} с")
+                raise SummarizeError("; ".join(errors[-4:]))
             for strict in (False, True):
                 try:
                     prompt = user + ("\n\nIMPORTANT: your previous answer was rejected. Answer ONLY in Ukrainian, "
@@ -164,6 +173,6 @@ def summarize(article, cfg):
                     return result, f"{provider}/{model}"
                 except SummarizeError as e:
                     errors.append(str(e))
-                    if "HTTP" in str(e):          # лимит или неверное имя модели — повтор не поможет
+                    if "HTTP" in str(e) or "таймаут" in str(e) or "сеть" in str(e):     # повтор той же модели не поможет
                         break
     raise SummarizeError("; ".join(errors[-4:]) or "не настроен ни один ключ нейросети")

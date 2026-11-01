@@ -1,5 +1,6 @@
 """Один проход бота: проверить ленту, опубликовать до N новых новостей. Запускается GitHub Actions по расписанию."""
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 
 from . import article as article_mod, feed, net, summarizer, tg
@@ -53,7 +54,11 @@ def run(cfg, store, now=None):
                 continue
             queue.append(it)
 
+    t0 = time.monotonic()
     for it in queue[:cfg.max_per_run]:
+        if time.monotonic() - t0 > cfg.run_budget:
+            log("Время запуска на исходе — остальные статьи обработаем в следующий раз")
+            break
         url = it["link"]
         prev = store.get(url)
         attempts = (prev["attempts"] if prev else 0) + 1
@@ -64,7 +69,9 @@ def run(cfg, store, now=None):
                 art["text"] = it["description"]                          # у коротких заметок весь текст — в описании ленты
             art["image"] = (art["image"] or it.get("image", "")) if cfg.use_photos else ""
             art["image"] = art["image"] or cfg.fallback_image_url
+            t1 = time.monotonic()
             result, model = summarizer.summarize(art, cfg)
+            log(f"Резюме готово за {time.monotonic() - t1:.0f} с [{model}]")
             if result.get("skip"):
                 store.set(url, "skipped", attempts, it["title"])
                 log(f"Пропущено ({result['skip_reason']}): {url}")
