@@ -52,7 +52,7 @@ class Config:
             telegram_token=e("TELEGRAM_TOKEN", ""), channel_id=e("CHANNEL_ID", ""),
             feed_url=e("FEED_URL", ""), site_url=e("SITE_URL", ""), link_regex=e("LINK_REGEX", ""),
             gemini_key=e("GEMINI_API_KEY", ""), groq_key=e("GROQ_API_KEY", ""),
-            gemini_models=_list("GEMINI_MODELS", "gemini-2.5-flash,gemini-2.0-flash"),
+            gemini_models=_list("GEMINI_MODELS", ""),
             groq_models=_list("GROQ_MODELS", "openai/gpt-oss-120b,llama-3.3-70b-versatile"),
             llm_order=_list("LLM_ORDER", "gemini,groq"),
             google_credentials_json=e("GOOGLE_CREDENTIALS_JSON", ""), sheet_id=e("SHEET_ID", ""),

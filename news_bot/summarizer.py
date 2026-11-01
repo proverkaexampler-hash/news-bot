@@ -92,12 +92,16 @@ def call_gemini(system, user, model, key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {"systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
+            "generationConfig": {"responseMimeType": "application/json"}}
     data = _with_retries(lambda: _post(url, {"x-goog-api-key": key}, body), f"gemini/{model}")
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
+        parts = data["candidates"][0]["content"]["parts"]
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    except (KeyError, IndexError, TypeError):
         raise SummarizeError(f"gemini/{model}: пустой ответ ({str(data)[:120]})")
+    if not text.strip():
+        raise SummarizeError(f"gemini/{model}: пустой ответ")
+    return text
 
 
 def call_groq(system, user, model, key):
@@ -109,6 +113,30 @@ def call_groq(system, user, model, key):
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError):
         raise SummarizeError(f"groq/{model}: пустой ответ")
+
+
+GEMINI_FALLBACK = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+
+
+def discover_gemini_models(key):
+    """Спрашиваем у Google, какие модели доступны этому ключу, и берём самые новые «flash» без preview/image/tts."""
+    try:
+        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", headers={"x-goog-api-key": key},
+                         params={"pageSize": 200}, timeout=30)
+        r.raise_for_status()
+        found = []
+        for m in r.json().get("models", []):
+            name = m.get("name", "").replace("models/", "")
+            match = re.fullmatch(r"gemini-(\d+(?:\.\d+)?)-flash(-lite)?", name)
+            if match and "generateContent" in m.get("supportedGenerationMethods", []):
+                found.append((bool(match.group(2)), -float(match.group(1)), name))   # обычные модели раньше lite, новые версии раньше старых
+        return [n for _, _, n in sorted(found)][:4]
+    except Exception:
+        return []
+
+
+def gemini_candidates(cfg):
+    return cfg.gemini_models or discover_gemini_models(cfg.gemini_key) or GEMINI_FALLBACK
 
 
 def summarize(article, cfg):
@@ -123,7 +151,7 @@ def summarize(article, cfg):
     errors = []
     for provider in cfg.llm_order:
         key = cfg.gemini_key if provider == "gemini" else cfg.groq_key
-        models = cfg.gemini_models if provider == "gemini" else cfg.groq_models
+        models = gemini_candidates(cfg) if provider == "gemini" else cfg.groq_models
         fn = call_gemini if provider == "gemini" else call_groq
         if not key:
             continue
