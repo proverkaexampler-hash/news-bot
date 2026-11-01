@@ -1,0 +1,5 @@
+requests>=2.31
+pillow>=10.0
+gspread>=6.0,<7
+google-auth>=2.30
+trafilatura>=1.12
