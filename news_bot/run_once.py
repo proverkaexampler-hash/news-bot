@@ -1,4 +1,4 @@
-"""Один проход бота: проверить ленту, опубликовать до N новых новостей. Запускается GitHub Actions по расписанию."""
+"""Бот новостей: один проход (run) или цикл «почти в реальном времени» (watch). Запускается GitHub Actions."""
 import dataclasses
 import sys
 import time
@@ -52,14 +52,36 @@ def remember_model(store, model_used, now):
         store.set(META_KEY, model, 0, "")
 
 
-def run(cfg, store, now=None):
+class FeedWatcher:
+    """Спрашивает у сайта «лента изменилась?» — если нет, берёт прошлый список без загрузки."""
+    def __init__(self, cfg):
+        self.cfg, self.etag, self.modified, self._items = cfg, None, None, []
+
+    def items(self):
+        cfg = self.cfg
+        if cfg.feed_url:
+            status, text, self.etag, self.modified = net.get_conditional(cfg.feed_url, self.etag, self.modified)
+            if status != 304:
+                self._items = feed.parse_feed(text)
+        else:
+            self._items = collect(cfg)
+        return self._items
+
+
+def _recent(row, seconds):
+    """Была ли запись обновлена менее чем `seconds` секунд назад (время в таблице — по часам сервера)."""
+    try:
+        return (datetime.now() - datetime.strptime(row["date"], "%Y-%m-%d %H:%M")).total_seconds() < seconds
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+def run(cfg, store, now=None, items=None):
     now = now or datetime.now(timezone.utc)
-    summarizer.BAD_MODELS.clear()
     pref, _ = stored_model(store, now)
     cfg = dataclasses.replace(cfg, preferred_model=pref)
-    items = collect(cfg)
-    log(f"В ленте статей: {len(items)}")
-    stats = {"posted": 0, "skipped": 0, "failed": 0}
+    items = collect(cfg) if items is None else items
+    stats = {"posted": 0, "skipped": 0, "failed": 0, "backlog": 0}
 
     items = [it for it in items if not any(c.lower() in cfg.skip_categories for c in it.get("categories", []))] \
         if store.is_empty() else items
@@ -78,11 +100,16 @@ def run(cfg, store, now=None):
                 continue
             if row and (row["status"] in DONE or row["attempts"] >= cfg.max_attempts):
                 continue
+            if row and row["status"] in ("failed", "posting") and _recent(row, cfg.retry_delay):
+                continue                                         # после ошибки даём сайту/нейросети время прийти в себя
             if it["published"] and now - it["published"] > timedelta(hours=cfg.max_age_hours):
                 store.set(it["link"], "skipped_old", row["attempts"] if row else 0, it["title"])
                 continue
             queue.append(it)
 
+    if queue:
+        log(f"Новых статей к публикации: {len(queue)}")
+    stats["backlog"] = max(0, len(queue) - cfg.max_per_run)
     t0 = time.monotonic()
     for it in queue[:cfg.max_per_run]:
         if time.monotonic() - t0 > cfg.run_budget:
@@ -122,8 +149,37 @@ def run(cfg, store, now=None):
             log(f"Ошибка ({status}, попытка {attempts}) {url}: {type(e).__name__}: {e}")
             if status == "gave_up":
                 notify_admin(cfg, f"⚠️ Не удалось опубликовать статью после {attempts} попыток:\n{url}\n{e}")
-    log(f"Итог: {stats}")
+    if queue:
+        log(f"Итог: {stats}")
     return stats
+
+
+def watch(cfg, store, loop_seconds, poll_seconds, sleep=time.sleep, clock=time.monotonic, now_fn=None):
+    """Режим «почти в реальном времени»: проверяем ленту каждые poll_seconds секунд, пока не истечёт loop_seconds."""
+    watcher, end, last_clear, last_err = FeedWatcher(cfg), clock() + loop_seconds, clock(), None
+    log(f"Режим реального времени: проверка ленты каждые {poll_seconds} с, работаем {loop_seconds // 60} мин")
+    total = {"posted": 0, "skipped": 0, "failed": 0}
+    while True:
+        backlog = 0
+        try:
+            now = now_fn() if now_fn else datetime.now(timezone.utc)
+            stats = run(cfg, store, now=now, items=watcher.items())
+            for k in total:
+                total[k] += stats[k]
+            backlog, last_err = stats["backlog"], None
+        except Exception as e:                                   # сайт/сеть недоступны — не падаем, пробуем снова
+            msg = f"{type(e).__name__}: {e}"
+            if msg != last_err:
+                log(f"Ошибка проверки ленты: {msg[:300]}")
+            last_err = msg
+        if clock() >= end:
+            break
+        if clock() - last_clear > 1800:                          # раз в полчаса даём «плохим» моделям второй шанс
+            summarizer.BAD_MODELS.clear()
+            last_clear = clock()
+        sleep(5 if backlog else poll_seconds)
+    log(f"Цикл завершён. Всего: {total}")
+    return total
 
 
 def build_store(cfg):
@@ -147,7 +203,11 @@ def main():
         problems.append("GEMINI_API_KEY (или GROQ_API_KEY)")
     if problems:
         sys.exit("Не заданы настройки: " + ", ".join(problems))
-    run(cfg, build_store(cfg))
+    store = build_store(cfg)
+    if cfg.loop_seconds > 0:
+        watch(cfg, store, cfg.loop_seconds, cfg.poll_seconds)
+    else:
+        run(cfg, store)
 
 
 if __name__ == "__main__":

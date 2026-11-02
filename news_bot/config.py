@@ -43,6 +43,9 @@ class Config:
     use_photos: bool = True              # False — не брать фото из статей
     fallback_image_url: str = ""         # картинка по умолчанию, если фото нет или оно отключено
     preferred_model: str = ""            # модель, которая сработала в прошлый раз (запоминается в таблице)
+    loop_seconds: int = 0                # >0 — работать циклом столько секунд (режим реального времени)
+    poll_seconds: int = 60               # как часто проверять ленту в режиме реального времени
+    retry_delay: int = 300               # через сколько секунд повторять статью после ошибки
     llm_budget: int = 150                # сколько секунд максимум тратим на нейросети для одной статьи
     run_budget: int = 420                # после скольких секунд работы не брать новые статьи (лимит запуска — 10 минут)
     dry_run: bool = False
@@ -66,6 +69,8 @@ class Config:
             title_prefix=("" if e("TITLE_PREFIX") == "-" else (e("TITLE_PREFIX") or "📰 ")),
             repeat_title=((e("REPEAT_TITLE") or "1") != "0"),
             source_label=e("SOURCE_LABEL") or "Джерело",
+            loop_seconds=_int("LOOP_SECONDS", 0), poll_seconds=max(20, _int("POLL_SECONDS", 60)),
+            retry_delay=_int("RETRY_DELAY", 300),
             llm_budget=_int("LLM_BUDGET", 150), run_budget=_int("RUN_BUDGET", 420),
             skip_categories=[x.lower() for x in _list("SKIP_CATEGORIES", "Лонгриды")],
             use_photos=((e("USE_PHOTOS") or "1") != "0"), fallback_image_url=e("FALLBACK_IMAGE_URL", ""),

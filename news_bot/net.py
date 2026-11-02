@@ -20,3 +20,19 @@ def get_text(url, timeout=25):
     if not enc or enc == "iso-8859-1":          # сервер не указал кодировку — почти всегда это UTF-8
         enc = "utf-8"
     return r.content.decode(enc, errors="replace")
+
+
+def get_conditional(url, etag=None, modified=None, timeout=25):
+    """Запрос ленты «только если изменилась». Возвращает (код, текст, etag, last_modified); при коде 304 текст пустой."""
+    h = {}
+    if etag:
+        h["If-None-Match"] = etag
+    if modified:
+        h["If-Modified-Since"] = modified
+    r = get(url, timeout, headers=h)
+    if r.status_code == 304:
+        return 304, "", etag, modified
+    enc = (r.encoding or "").lower()
+    if not enc or enc == "iso-8859-1":
+        enc = "utf-8"
+    return r.status_code, r.content.decode(enc, errors="replace"), r.headers.get("ETag"), r.headers.get("Last-Modified")
