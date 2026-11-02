@@ -2,13 +2,17 @@ name: News
 
 on:
   schedule:
-    - cron: "*/15 * * * *"        # каждые 15 минут (GitHub может задерживать запуск на 5–30 минут)
+    - cron: "*/30 * * * *"        # страховка: следующий «живой» запуск всегда ждёт в очереди и стартует, как только закончится предыдущий
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Пробный запуск: показать посты в логе, но НЕ публиковать в канал"
         type: boolean
         default: true
+      loop:
+        description: "Режим реального времени (работать ~5,5 часа, проверка каждую минуту). Выключено = один проход"
+        type: boolean
+        default: false
 
 concurrency:
   group: news-bot
@@ -21,7 +25,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,6 +43,7 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          # необязательные настройки (раздел Variables): если не заданы, берутся значения по умолчанию
           SITE_URL: ${{ vars.SITE_URL }}
           LINK_REGEX: ${{ vars.LINK_REGEX }}
           MAX_PER_RUN: ${{ vars.MAX_PER_RUN }}
@@ -54,6 +59,11 @@ jobs:
           SKIP_CATEGORIES: ${{ vars.SKIP_CATEGORIES }}
           USE_PHOTOS: ${{ vars.USE_PHOTOS }}
           FALLBACK_IMAGE_URL: ${{ vars.FALLBACK_IMAGE_URL }}
+          LLM_BUDGET: ${{ vars.LLM_BUDGET }}
+          RUN_BUDGET: ${{ vars.RUN_BUDGET }}
+          POLL_SECONDS: ${{ vars.POLL_SECONDS }}
+          RETRY_DELAY: ${{ vars.RETRY_DELAY }}
+          LOOP_SECONDS: ${{ (github.event_name == 'schedule' || github.event.inputs.loop == 'true') && '20100' || '0' }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
         run: python -m news_bot.run_once
       - name: Keep schedule alive (best effort)
